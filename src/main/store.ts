@@ -56,6 +56,7 @@ export class AppStore {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.bootstrap();
+    this.initializeSupabaseFromSettings();
   }
 
   private bootstrap(): void {
@@ -78,6 +79,7 @@ export class AppStore {
       CREATE TABLE IF NOT EXISTS attendance_sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER NOT NULL,
+        employee_name TEXT,
         clock_in_at TEXT NOT NULL,
         clock_out_at TEXT,
         synced INTEGER NOT NULL DEFAULT 1
@@ -86,6 +88,7 @@ export class AppStore {
       CREATE TABLE IF NOT EXISTS leave_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER NOT NULL,
+        employee_name TEXT,
         type TEXT NOT NULL DEFAULT 'Other',
         start_date TEXT NOT NULL,
         end_date TEXT NOT NULL,
@@ -110,6 +113,15 @@ export class AppStore {
     } catch {
       // Ignore if column already exists
     }
+    try {
+      this.db.exec('ALTER TABLE attendance_sessions ADD COLUMN employee_name TEXT');
+    } catch {
+    }
+    
+    try {
+      this.db.exec('ALTER TABLE leave_requests ADD COLUMN employee_name TEXT');
+    } catch {
+    }
 
     this.ensureSetting('wizard_complete', '0');
     this.ensureSetting('supabase_url', '');
@@ -131,6 +143,22 @@ export class AppStore {
       key,
       value
     );
+  }
+
+  private async initializeSupabaseFromSettings(): Promise<void> {
+    const url = this.getSetting('supabase_url');
+    const key = this.getSetting('supabase_key');
+  
+    if (!url || !key) {
+      console.log('[Supabase] No saved config found');
+      return;
+    }
+  
+    console.log('[Supabase] Restoring saved config...');
+  
+    const ok = await supabaseSync.initialize(url, key);
+  
+    console.log('[Supabase] Restore result:', ok);
   }
 
   public getSetting(key: string): string {
@@ -213,10 +241,17 @@ export class AppStore {
       for (const att of attendance as Array<Record<string, unknown>>) {
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO attendance_sessions (id, employee_id, clock_in_at, clock_out_at, synced)
-             VALUES (?, ?, ?, ?, ?)`
+            `INSERT OR IGNORE INTO attendance_sessions (id, employee_id, employee_name, clock_in_at, clock_out_at, synced)
+            VALUES (?, ?, ?, ?, ?, ?)`
           )
-          .run(att.id, att.employee_id, att.clock_in_at, att.clock_out_at, att.synced ? 1 : 0);
+          .run(
+            att.id,
+            att.employee_id,
+            att.employee_name,
+            att.clock_in_at,
+            att.clock_out_at,
+            att.synced ? 1 : 0
+          );
       }
 
       // Fetch leave requests
@@ -224,12 +259,25 @@ export class AppStore {
       for (const leave of leaves as Array<Record<string, unknown>>) {
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO leave_requests (id, employee_id, type, start_date, end_date, reason, status, manager_comment, created_at, updated_at, synced)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT OR IGNORE INTO leave_requests (
+              id,
+              employee_id,
+              employee_name,
+              type,
+              start_date,
+              end_date,
+              reason,
+              status,
+              manager_comment,
+              created_at,
+              updated_at,
+              synced
+            )`
           )
           .run(
             leave.id,
             leave.employee_id,
+            leave.employee_name,
             leave.type,
             leave.start_date,
             leave.end_date,
@@ -295,13 +343,13 @@ export class AppStore {
   private getAttendanceSessions(): AttendanceSessionRecord[] {
     return this.db
       .prepare(
-        `SELECT s.id, s.employee_id AS employeeId,
-                COALESCE(e.first_name || ' ' || e.last_name, 'Unknown') AS employeeName,
+        `SELECT s.id,
+                s.employee_id AS employeeId,
+                s.employee_name AS employeeName,
                 s.clock_in_at AS clockInAt,
                 s.clock_out_at AS clockOutAt,
                 s.synced = 1 AS synced
          FROM attendance_sessions s
-         LEFT JOIN employees e ON e.id = s.employee_id
          ORDER BY s.clock_in_at DESC`
       )
       .all() as AttendanceSessionRecord[];
@@ -312,7 +360,7 @@ export class AppStore {
       .prepare(
         `SELECT r.id,
                 r.employee_id AS employeeId,
-                COALESCE(e.first_name || ' ' || e.last_name, 'Unknown') AS employeeName,
+                r.employee_name AS employeeName,
                 r.type,
                 r.start_date AS startDate,
                 r.end_date AS endDate,
@@ -323,7 +371,6 @@ export class AppStore {
                 r.updated_at AS updatedAt,
                 r.synced = 1 AS synced
          FROM leave_requests r
-         LEFT JOIN employees e ON e.id = r.employee_id
          ORDER BY r.created_at DESC`
       )
       .all() as LeaveRequestRecord[];
@@ -512,8 +559,15 @@ export class AppStore {
 
     const clockInTime = isoNow();
     const insertResult = this.db
-      .prepare('INSERT INTO attendance_sessions (employee_id, clock_in_at, synced) VALUES (?, ?, ?)')
-      .run(this.activeUser.id, clockInTime, this.isOnline() ? 1 : 0);
+      .prepare(
+        'INSERT INTO attendance_sessions (employee_id, employee_name, clock_in_at, synced) VALUES (?, ?, ?, ?)'
+      )
+      .run(
+        this.activeUser.id,
+        this.activeUser.displayName,
+        clockInTime,
+        this.isOnline() ? 1 : 0
+      );
 
     const sessionId = (insertResult as any).lastInsertRowid;
     const session = this.db.prepare(`SELECT * FROM attendance_sessions WHERE id = ?`).get(sessionId);
@@ -558,11 +612,12 @@ export class AppStore {
     const now = isoNow();
     const insertResult = this.db
       .prepare(
-        `INSERT INTO leave_requests (employee_id, type, start_date, end_date, reason, status, created_at, updated_at, synced)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+        `INSERT INTO leave_requests (employee_id, employee_name, type, start_date, end_date, reason, status, created_at, updated_at, synced)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
       )
       .run(
         input.employeeId,
+        this.activeUser.displayName,
         input.type || 'Other',
         input.startDate,
         input.endDate,
@@ -730,12 +785,11 @@ export class AppStore {
     const rows = this.db
       .prepare(
         `SELECT s.id,
-                COALESCE(e.first_name || ' ' || e.last_name, 'Unknown') AS employeeName,
+                s.employee_name AS employeeName,
                 s.clock_in_at AS clockInAt,
                 s.clock_out_at AS clockOutAt,
                 s.synced = 1 AS synced
          FROM attendance_sessions s
-         LEFT JOIN employees e ON e.id = s.employee_id
          ${where}
          ORDER BY s.clock_in_at DESC`
       )
@@ -780,7 +834,7 @@ export class AppStore {
     const rows = this.db
       .prepare(
         `SELECT r.id,
-                COALESCE(e.first_name || ' ' || e.last_name, 'Unknown') AS employeeName,
+                r.employee_name AS employeeName,
                 r.type,
                 r.start_date AS startDate,
                 r.end_date AS endDate,
@@ -790,7 +844,6 @@ export class AppStore {
                 r.created_at AS createdAt,
                 r.updated_at AS updatedAt
          FROM leave_requests r
-         LEFT JOIN employees e ON e.id = r.employee_id
          ${where}
          ORDER BY r.created_at DESC`
       )
