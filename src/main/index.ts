@@ -53,8 +53,24 @@ const createWindow = (): void => {
   });
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
+
+  // ✅ 1. Sync on startup
+  try {
+    await store.syncFromCloud();
+  } catch (err) {
+    console.warn('[Sync] Startup sync failed:', err);
+  }
+
+  // ✅ 2. Sync every 5 minutes
+  setInterval(async () => {
+    try {
+      await store.syncFromCloud();
+    } catch (err) {
+      console.warn('[Sync] Interval sync failed:', err);
+    }
+  }, 5 * 60 * 1000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -70,8 +86,17 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('app:snapshot', () => store.snapshot());
-ipcMain.handle('sync:reportConnectivity', (_event, online: boolean) => {
+ipcMain.handle('sync:reportConnectivity', async (_event, online: boolean) => {
   const snapshot = store.reportConnectivity(Boolean(online));
+
+  if (online) {
+    try {
+      await store.syncFromCloud();
+    } catch (err) {
+      console.warn('[Sync] Online sync failed:', err);
+    }
+  }
+
   broadcastSnapshot();
   return snapshot;
 });

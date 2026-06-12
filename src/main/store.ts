@@ -218,31 +218,93 @@ export class AppStore {
     this.queueAction(actionType, payload);
   }
 
+  private syncing = false;
+
+  public async syncFromCloud(): Promise<void> {
+    if (this.syncing) return;
+    this.syncing = true;
+
+    try {
+      if (!supabaseSync.isConnected()) {
+        console.warn('[AppStore] Supabase not connected, skipping sync');
+        return;
+      }
+
+      await this.pullFromSupabase();
+      this.setSetting('last_synced_at', isoNow());
+
+      console.log('[AppStore] Cloud sync completed');
+    } catch (error) {
+      console.warn('[AppStore] Sync failed:', error);
+    } finally {
+      this.syncing = false;
+    }
+  }
   private async pullFromSupabase(): Promise<void> {
     if (!supabaseSync.isConnected()) {
       console.warn('[AppStore] Supabase not connected, skipping pull');
       return;
     }
-
+  
     try {
+      // ======================
       // Fetch employees
+      // ======================
       const employees = await supabaseSync.fetchRecords('employees');
       for (const emp of employees as Array<Record<string, unknown>>) {
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO employees (id, first_name, last_name, username, dob, password_hash, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO employees (
+              id,
+              first_name,
+              last_name,
+              username,
+              dob,
+              password_hash,
+              created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              first_name = excluded.first_name,
+              last_name = excluded.last_name,
+              username = excluded.username,
+              dob = excluded.dob,
+              password_hash = excluded.password_hash,
+              created_at = excluded.created_at`
           )
-          .run(emp.id, emp.first_name, emp.last_name, emp.username, emp.dob, emp.password_hash, emp.created_at);
+          .run(
+            emp.id,
+            emp.first_name,
+            emp.last_name,
+            emp.username,
+            emp.dob,
+            emp.password_hash,
+            emp.created_at
+          );
       }
-
+  
+      // ======================
       // Fetch attendance
+      // ======================
       const attendance = await supabaseSync.fetchRecords('attendance_sessions');
       for (const att of attendance as Array<Record<string, unknown>>) {
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO attendance_sessions (id, employee_id, employee_name, clock_in_at, clock_out_at, synced)
-            VALUES (?, ?, ?, ?, ?, ?)`
+            `INSERT INTO attendance_sessions (
+              id,
+              employee_id,
+              employee_name,
+              clock_in_at,
+              clock_out_at,
+              synced
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              employee_id = excluded.employee_id,
+              employee_name = excluded.employee_name,
+              clock_in_at = excluded.clock_in_at,
+              clock_out_at = excluded.clock_out_at,
+              synced = excluded.synced`
           )
           .run(
             att.id,
@@ -253,13 +315,15 @@ export class AppStore {
             att.synced ? 1 : 0
           );
       }
-
+  
+      // ======================
       // Fetch leave requests
+      // ======================
       const leaves = await supabaseSync.fetchRecords('leave_requests');
       for (const leave of leaves as Array<Record<string, unknown>>) {
         this.db
           .prepare(
-            `INSERT OR IGNORE INTO leave_requests (
+            `INSERT INTO leave_requests (
               id,
               employee_id,
               employee_name,
@@ -272,7 +336,20 @@ export class AppStore {
               created_at,
               updated_at,
               synced
-            )`
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              employee_id = excluded.employee_id,
+              employee_name = excluded.employee_name,
+              type = excluded.type,
+              start_date = excluded.start_date,
+              end_date = excluded.end_date,
+              reason = excluded.reason,
+              status = excluded.status,
+              manager_comment = excluded.manager_comment,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at,
+              synced = excluded.synced`
           )
           .run(
             leave.id,
@@ -289,7 +366,7 @@ export class AppStore {
             leave.synced ? 1 : 0
           );
       }
-
+  
       console.log('[AppStore] Successfully pulled data from Supabase');
     } catch (error) {
       console.warn(
