@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { supabaseSync } from './supabase';
 import type {
@@ -60,34 +61,38 @@ export class AppStore {
   }
 
   private bootstrap(): void {
+    // Add device_id tracking
+    this.ensureSetting('device_id', randomUUID());
+    
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
       );
-
       CREATE TABLE IF NOT EXISTS employees (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT PRIMARY KEY,
         first_name TEXT NOT NULL,
         last_name TEXT NOT NULL,
         username TEXT NOT NULL UNIQUE,
         dob TEXT NOT NULL,
         password_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        version_clock INTEGER NOT NULL DEFAULT 1
       );
-
       CREATE TABLE IF NOT EXISTS attendance_sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee_id INTEGER NOT NULL,
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
         employee_name TEXT,
         clock_in_at TEXT NOT NULL,
         clock_out_at TEXT,
-        synced INTEGER NOT NULL DEFAULT 1
+        synced INTEGER NOT NULL DEFAULT 1,
+        device_id TEXT NOT NULL,
+        version_clock INTEGER NOT NULL DEFAULT 1
       );
-
       CREATE TABLE IF NOT EXISTS leave_requests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee_id INTEGER NOT NULL,
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
         employee_name TEXT,
         type TEXT NOT NULL DEFAULT 'Other',
         start_date TEXT NOT NULL,
@@ -97,9 +102,10 @@ export class AppStore {
         manager_comment TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        synced INTEGER NOT NULL DEFAULT 1
+        synced INTEGER NOT NULL DEFAULT 1,
+        device_id TEXT NOT NULL,
+        version_clock INTEGER NOT NULL DEFAULT 1
       );
-
       CREATE TABLE IF NOT EXISTS sync_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         action_type TEXT NOT NULL,
@@ -184,21 +190,23 @@ export class AppStore {
     const rows = this.db
       .prepare('SELECT id, action_type, payload FROM sync_queue')
       .all() as Array<{ id: number; action_type: string; payload: string }>;
-
+    
     if (rows.length > 0) {
+      const deviceId = this.getSetting('device_id');
+      
       const queuedActions = rows.map((row) => ({
         id: String(row.id),
         actionType: row.action_type,
         entityType: row.action_type.split(':')[0],
         entityId: '',
-        payload: JSON.parse(row.payload),
+        payload: {
+          ...JSON.parse(row.payload),
+          device_id: deviceId // Add device tracking
+        },
         createdAt: isoNow()
       }));
-
-      // Actually sync to Supabase
-      await supabaseSync.processQueue(queuedActions);
       
-      // Delete queue after syncing
+      await supabaseSync.processQueue(queuedActions);
       this.db.prepare('DELETE FROM sync_queue').run();
       this.setSetting('last_synced_at', isoNow());
     }
@@ -206,15 +214,15 @@ export class AppStore {
 
   private async maybeSync(actionType: string, payload: Record<string, unknown>): Promise<void> {
     if (this.isOnline()) {
-      // If Supabase is connected, attempt cloud sync
       if (supabaseSync.isConnected()) {
         this.queueAction(actionType, payload);
+        // CRITICAL: Flush queue then pull from cloud to confirm
+        await this.flushQueue();
+        await this.pullFromSupabase(); // <-- Pull after push
+        this.setSetting('last_synced_at', isoNow());
+        return;
       }
-      await this.flushQueue();
-      this.setSetting('last_synced_at', isoNow());
-      return;
     }
-
     this.queueAction(actionType, payload);
   }
 
@@ -261,16 +269,20 @@ export class AppStore {
               username,
               dob,
               password_hash,
-              created_at
+              created_at,
+              device_id,
+              version_clock
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               first_name = excluded.first_name,
               last_name = excluded.last_name,
               username = excluded.username,
               dob = excluded.dob,
               password_hash = excluded.password_hash,
-              created_at = excluded.created_at`
+              created_at = excluded.created_at,
+              device_id = excluded.device_id,
+              version_clock = excluded.version_clock`
           )
           .run(
             emp.id,
@@ -279,7 +291,9 @@ export class AppStore {
             emp.username,
             emp.dob,
             emp.password_hash,
-            emp.created_at
+            emp.created_at,
+            emp.device_id || '',
+            emp.version_clock || 1
           );
       }
   
@@ -296,15 +310,19 @@ export class AppStore {
               employee_name,
               clock_in_at,
               clock_out_at,
-              synced
+              synced,
+              device_id,
+              version_clock
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               employee_id = excluded.employee_id,
               employee_name = excluded.employee_name,
               clock_in_at = excluded.clock_in_at,
               clock_out_at = excluded.clock_out_at,
-              synced = excluded.synced`
+              synced = excluded.synced,
+              device_id = excluded.device_id,
+              version_clock = excluded.version_clock`
           )
           .run(
             att.id,
@@ -312,7 +330,9 @@ export class AppStore {
             att.employee_name,
             att.clock_in_at,
             att.clock_out_at,
-            att.synced ? 1 : 0
+            att.synced ? 1 : 0,
+            att.device_id || '',
+            att.version_clock || 1
           );
       }
   
@@ -335,9 +355,11 @@ export class AppStore {
               manager_comment,
               created_at,
               updated_at,
-              synced
+              synced,
+              device_id,
+              version_clock
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               employee_id = excluded.employee_id,
               employee_name = excluded.employee_name,
@@ -349,7 +371,9 @@ export class AppStore {
               manager_comment = excluded.manager_comment,
               created_at = excluded.created_at,
               updated_at = excluded.updated_at,
-              synced = excluded.synced`
+              synced = excluded.synced,
+              device_id = excluded.device_id,
+              version_clock = excluded.version_clock`
           )
           .run(
             leave.id,
@@ -363,7 +387,9 @@ export class AppStore {
             leave.manager_comment,
             leave.created_at,
             leave.updated_at,
-            leave.synced ? 1 : 0
+            leave.synced ? 1 : 0,
+            leave.device_id || '',
+            leave.version_clock || 1
           );
       }
   
@@ -389,7 +415,7 @@ export class AppStore {
          ORDER BY created_at DESC`
       )
       .all() as Array<{
-        id: number;
+        id: string; // <-- UUID now
         firstName: string;
         lastName: string;
         username: string;
@@ -397,13 +423,12 @@ export class AppStore {
         password_hash: string;
         createdAt: string;
       }>;
-
+  
     return rawEmployees.map((emp) => {
       const dobParts = emp.dob.split('-');
       const dayOfBirth = Number(dobParts[2] || 0);
       const generatedPassword = `${emp.firstName.trim()[0]}${emp.lastName.trim()[0]}${dayOfBirth}`.toLowerCase();
       const isDefault = emp.password_hash === hashPassword(generatedPassword);
-
       return {
         id: emp.id,
         firstName: emp.firstName,
@@ -535,7 +560,7 @@ export class AppStore {
       }
 
       this.activeUser = {
-        id: 0,
+        id: '0',
         role: 'manager',
         displayName: 'Manager',
         username: 'manager'
@@ -550,7 +575,7 @@ export class AppStore {
     const employee = this.db
       .prepare('SELECT id, first_name, last_name, username, password_hash FROM employees WHERE username = ?')
       .get(input.username.trim()) as
-      | { id: number; first_name: string; last_name: string; username: string; password_hash: string }
+      | { id: string; first_name: string; last_name: string; username: string; password_hash: string }
       | undefined;
 
     if (!employee || employee.password_hash !== hashPassword(input.password)) {
@@ -576,38 +601,40 @@ export class AppStore {
     if (!this.activeUser || this.activeUser.role !== 'manager') {
       throw new Error('Only managers can create employees.');
     }
-
     if (!input.firstName.trim() || !input.lastName.trim() || !input.username.trim() || !input.dob.trim()) {
       throw new Error('All employee fields are required.');
     }
-
+  
     const dobParts = input.dob.split('-');
     const dayOfBirth = Number(dobParts[2]);
     const generatedPassword = `${input.firstName.trim()[0]}${input.lastName.trim()[0]}${dayOfBirth}`.toLowerCase();
     const createdAt = isoNow();
-
-    const insertResult = this.db
+    const empId = randomUUID(); // <-- UUID instead of auto-increment
+    const deviceId = this.getSetting('device_id');
+  
+    this.db
       .prepare(
-        `INSERT INTO employees (first_name, last_name, username, dob, password_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO employees (id, first_name, last_name, username, dob, password_hash, created_at, device_id, version_clock)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
+        empId,
         input.firstName.trim(),
         input.lastName.trim(),
         input.username.trim(),
         input.dob.trim(),
         hashPassword(generatedPassword),
-        createdAt
+        createdAt,
+        deviceId,
+        1
       );
-
-    const empId = (insertResult as any).lastInsertRowid;
+  
     const employee = this.db.prepare(`SELECT * FROM employees WHERE id = ?`).get(empId);
-
     await this.maybeSync('employee:create', employee as Record<string, unknown>);
     return this.buildSnapshot();
   }
 
-  public async deleteEmployee(employeeId: number): Promise<AppSnapshot> {
+  public async deleteEmployee(employeeId: string): Promise<AppSnapshot> {
     if (!this.activeUser || this.activeUser.role !== 'manager') {
       throw new Error('Only managers can delete employees.');
     }
@@ -625,33 +652,40 @@ export class AppStore {
     if (!this.activeUser || this.activeUser.role !== 'employee') {
       throw new Error('Only employees can clock in.');
     }
-
+  
     const openSession = this.db
       .prepare('SELECT id FROM attendance_sessions WHERE employee_id = ? AND clock_out_at IS NULL ORDER BY clock_in_at DESC LIMIT 1')
-      .get(this.activeUser.id) as { id: number } | undefined;
-
+      .get(this.activeUser.id) as { id: string } | undefined;
+  
     if (openSession) {
       throw new Error('You are already clocked in.');
     }
-
+  
     const clockInTime = isoNow();
-    const insertResult = this.db
+    const sessionId = randomUUID(); // <-- UUID
+    const deviceId = this.getSetting('device_id');
+  
+    this.db
       .prepare(
-        'INSERT INTO attendance_sessions (employee_id, employee_name, clock_in_at, synced) VALUES (?, ?, ?, ?)'
+        'INSERT INTO attendance_sessions (id, employee_id, employee_name, clock_in_at, synced, device_id, version_clock) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
+        sessionId,
         this.activeUser.id,
         this.activeUser.displayName,
         clockInTime,
-        this.isOnline() ? 1 : 0
+        this.isOnline() ? 1 : 0,
+        deviceId,
+        1
       );
-
-    const sessionId = (insertResult as any).lastInsertRowid;
+  
     const session = this.db.prepare(`SELECT * FROM attendance_sessions WHERE id = ?`).get(sessionId);
-
     await this.maybeSync('attendance:clockIn', session as Record<string, unknown>);
     return this.buildSnapshot();
   }
+
+  // FIXED clockOut method for store.ts
+// Change: { id: number } → { id: string }
 
   public async clockOut(): Promise<AppSnapshot> {
     if (!this.activeUser || this.activeUser.role !== 'employee') {
@@ -660,7 +694,7 @@ export class AppStore {
 
     const openSession = this.db
       .prepare('SELECT id FROM attendance_sessions WHERE employee_id = ? AND clock_out_at IS NULL ORDER BY clock_in_at DESC LIMIT 1')
-      .get(this.activeUser.id) as { id: number } | undefined;
+      .get(this.activeUser.id) as { id: string } | undefined;
 
     if (!openSession) {
       throw new Error('No active clock-in session was found.');
@@ -685,14 +719,18 @@ export class AppStore {
     if (!this.activeUser || this.activeUser.role !== 'employee') {
       throw new Error('Only employees can submit leave requests.');
     }
-
+  
     const now = isoNow();
-    const insertResult = this.db
+    const leaveId = randomUUID(); // <-- UUID
+    const deviceId = this.getSetting('device_id');
+  
+    this.db
       .prepare(
-        `INSERT INTO leave_requests (employee_id, employee_name, type, start_date, end_date, reason, status, created_at, updated_at, synced)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+        `INSERT INTO leave_requests (id, employee_id, employee_name, type, start_date, end_date, reason, status, created_at, updated_at, synced, device_id, version_clock)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
       )
       .run(
+        leaveId,
         input.employeeId,
         this.activeUser.displayName,
         input.type || 'Other',
@@ -701,12 +739,12 @@ export class AppStore {
         input.reason.trim(),
         now,
         now,
-        this.isOnline() ? 1 : 0
+        this.isOnline() ? 1 : 0,
+        deviceId,
+        1
       );
-
-    const leaveId = (insertResult as any).lastInsertRowid;
+  
     const leaveRequest = this.db.prepare(`SELECT * FROM leave_requests WHERE id = ?`).get(leaveId);
-
     await this.maybeSync('leave:submit', leaveRequest as Record<string, unknown>);
     return this.buildSnapshot();
   }
@@ -733,7 +771,7 @@ export class AppStore {
     return this.buildSnapshot();
   }
 
-  public async withdrawLeaveRequest(requestId: number, employeeId: number): Promise<AppSnapshot> {
+  public async withdrawLeaveRequest(requestId: string, employeeId: string): Promise<AppSnapshot> {
     if (!this.activeUser || this.activeUser.role !== 'employee' || this.activeUser.id !== employeeId) {
       throw new Error('Only the owning employee can withdraw a leave request.');
     }
@@ -824,7 +862,7 @@ export class AppStore {
       throw new Error('New password is required.');
     }
 
-    const employee = this.db.prepare('SELECT id FROM employees WHERE id = ?').get(input.employeeId) as { id: number } | undefined;
+    const employee = this.db.prepare('SELECT id FROM employees WHERE id = ?').get(input.employeeId) as { id: string } | undefined;
     if (!employee) {
       throw new Error('Employee not found.');
     }
@@ -842,22 +880,23 @@ export class AppStore {
   public exportTimeLogsCsv(filters: ExportFilters): string {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-
-    if (typeof filters.employeeId === 'number') {
+  
+    // CHANGED: removed typeof check, now just checks if exists
+    if (filters.employeeId) {
       clauses.push('s.employee_id = ?');
       params.push(filters.employeeId);
     }
-
+  
     if (filters.fromDate) {
       clauses.push('date(s.clock_in_at) >= date(?)');
       params.push(filters.fromDate);
     }
-
+  
     if (filters.toDate) {
       clauses.push('date(s.clock_in_at) <= date(?)');
       params.push(filters.toDate);
     }
-
+  
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db
       .prepare(
@@ -870,8 +909,8 @@ export class AppStore {
          ${where}
          ORDER BY s.clock_in_at DESC`
       )
-      .all(...params) as Array<{ id: number; employeeName: string; clockInAt: string; clockOutAt: string | null; synced: number }>;
-
+      .all(...params) as Array<{ id: string; employeeName: string; clockInAt: string; clockOutAt: string | null; synced: number }>;
+  
     return toCsv(
       rows.map((row) => ({
         id: row.id,
@@ -886,27 +925,28 @@ export class AppStore {
   public exportLeaveRequestsCsv(filters: ExportFilters): string {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-
-    if (typeof filters.employeeId === 'number') {
+  
+    // CHANGED: removed typeof check, now just checks if exists
+    if (filters.employeeId) {
       clauses.push('r.employee_id = ?');
       params.push(filters.employeeId);
     }
-
+  
     if (filters.status) {
       clauses.push('r.status = ?');
       params.push(filters.status);
     }
-
+  
     if (filters.fromDate) {
       clauses.push('date(r.created_at) >= date(?)');
       params.push(filters.fromDate);
     }
-
+  
     if (filters.toDate) {
       clauses.push('date(r.created_at) <= date(?)');
       params.push(filters.toDate);
     }
-
+  
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db
       .prepare(
@@ -925,18 +965,18 @@ export class AppStore {
          ORDER BY r.created_at DESC`
       )
       .all(...params) as Array<{
-      id: number;
-      employeeName: string;
-      type: string;
-      startDate: string;
-      endDate: string;
-      reason: string;
-      status: string;
-      managerComment: string;
-      createdAt: string;
-      updatedAt: string;
-    }>;
-
+        id: string;
+        employeeName: string;
+        type: string;
+        startDate: string;
+        endDate: string;
+        reason: string;
+        status: string;
+        managerComment: string;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+  
     return toCsv(rows);
   }
 }

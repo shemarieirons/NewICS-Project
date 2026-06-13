@@ -1,14 +1,14 @@
 export type Role = 'employee' | 'manager';
 
 export interface CurrentUser {
-  id: number;
+  id: string;
   role: Role;
   displayName: string;
   username: string;
 }
 
 export interface EmployeeRecord {
-  id: number;
+  id: string;
   firstName: string;
   lastName: string;
   username: string;
@@ -19,8 +19,8 @@ export interface EmployeeRecord {
 }
 
 export interface AttendanceSessionRecord {
-  id: number;
-  employeeId: number;
+  id: string;
+  employeeId: string;
   employeeName: string;
   clockInAt: string;
   clockOutAt: string | null;
@@ -28,8 +28,8 @@ export interface AttendanceSessionRecord {
 }
 
 export interface LeaveRequestRecord {
-  id: number;
-  employeeId: number;
+  id: string;
+  employeeId: string;
   employeeName: string;
   type: string;
   startDate: string;
@@ -78,7 +78,7 @@ export interface CreateEmployeeInput {
 }
 
 export interface SubmitLeaveInput {
-  employeeId: number;
+  employeeId: string;
   type?: string;
   startDate: string;
   endDate: string;
@@ -86,13 +86,13 @@ export interface SubmitLeaveInput {
 }
 
 export interface ReviewLeaveInput {
-  requestId: number;
+  requestId: string;
   status: 'approved' | 'rejected';
   comment?: string;
 }
 
 export interface ChangePasswordInput {
-  employeeId: number;
+  employeeId: string;
   currentPassword: string;
   newPassword: string;
 }
@@ -103,12 +103,12 @@ export interface ChangeMasterPasswordInput {
 }
 
 export interface ResetEmployeePasswordInput {
-  employeeId: number;
+  employeeId: string;
   newPassword: string;
 }
 
 export interface ExportFilters {
-  employeeId?: number;
+  employeeId?: string;
   status?: 'pending' | 'approved' | 'rejected';
   fromDate?: string;
   toDate?: string;
