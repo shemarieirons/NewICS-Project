@@ -180,17 +180,17 @@ export class SupabaseSync {
         } else if (action.entityType === 'employee') {
           success = await this.syncRecord('employees', {
             ...(convertedPayload as Record<string, unknown>),
-            synced: true
+            synced: 1
           });
         } else if (action.entityType === 'attendance') {
           success = await this.syncRecord('attendance_sessions', {
             ...(convertedPayload as Record<string, unknown>),
-            synced: true
+            synced: 1
           });
         } else if (action.entityType === 'leave') {
           success = await this.syncRecord('leave_requests', {
             ...(convertedPayload as Record<string, unknown>),
-            synced: true
+            synced: 1
           });
         }
 

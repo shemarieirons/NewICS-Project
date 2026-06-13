@@ -62,8 +62,6 @@ export class AppStore {
 
   private bootstrap(): void {
     // Add device_id tracking
-    this.ensureSetting('device_id', randomUUID());
-    
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -128,7 +126,7 @@ export class AppStore {
       this.db.exec('ALTER TABLE leave_requests ADD COLUMN employee_name TEXT');
     } catch {
     }
-
+    this.ensureSetting('device_id', randomUUID());
     this.ensureSetting('wizard_complete', '0');
     this.ensureSetting('supabase_url', '');
     this.ensureSetting('supabase_key', '');
