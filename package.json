@@ -41,7 +41,7 @@
     "asarUnpack": [
       "**/*.node"
     ],
-    "npmRebuild": false,
+    "npmRebuild": true,
     "buildDependenciesFromSource": false,
     "directories": {
       "output": "release"
