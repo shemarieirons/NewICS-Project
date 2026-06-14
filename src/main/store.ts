@@ -57,7 +57,10 @@ export class AppStore {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.bootstrap();
-    this.initializeSupabaseFromSettings();
+  }
+
+  public async initialize(): Promise<void> {
+    await this.initializeSupabaseFromSettings();
   }
 
   private bootstrap(): void {
@@ -294,6 +297,16 @@ export class AppStore {
             emp.version_clock || 1
           );
       }
+      
+      // ✅ DELETE employees that no longer exist in Supabase
+      const employeeIds = (employees as Array<Record<string, unknown>>).map(e => e.id);
+      if (employeeIds.length > 0) {
+        const placeholders = employeeIds.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM employees WHERE id NOT IN (${placeholders})`).run(...employeeIds);
+      } else {
+        // If no employees in Supabase, delete all local employees
+        this.db.prepare('DELETE FROM employees').run();
+      }
   
       // ======================
       // Fetch attendance
@@ -332,6 +345,15 @@ export class AppStore {
             att.device_id || '',
             att.version_clock || 1
           );
+      }
+      
+      // ✅ DELETE attendance that no longer exists in Supabase
+      const attendanceIds = (attendance as Array<Record<string, unknown>>).map(a => a.id);
+      if (attendanceIds.length > 0) {
+        const placeholders = attendanceIds.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM attendance_sessions WHERE id NOT IN (${placeholders})`).run(...attendanceIds);
+      } else {
+        this.db.prepare('DELETE FROM attendance_sessions').run();
       }
   
       // ======================
@@ -389,6 +411,15 @@ export class AppStore {
             leave.device_id || '',
             leave.version_clock || 1
           );
+      }
+      
+      // ✅ DELETE leave requests that no longer exist in Supabase
+      const leaveIds = (leaves as Array<Record<string, unknown>>).map(l => l.id);
+      if (leaveIds.length > 0) {
+        const placeholders = leaveIds.map(() => '?').join(',');
+        this.db.prepare(`DELETE FROM leave_requests WHERE id NOT IN (${placeholders})`).run(...leaveIds);
+      } else {
+        this.db.prepare('DELETE FROM leave_requests').run();
       }
   
       console.log('[AppStore] Successfully pulled data from Supabase');

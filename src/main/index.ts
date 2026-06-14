@@ -55,7 +55,7 @@ const createWindow = (): void => {
 
 app.whenReady().then(async () => {
   createWindow();
-
+  await store.initialize();
   // ✅ 1. Sync on startup
   try {
     await store.syncFromCloud();
