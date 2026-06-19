@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { supabaseSync } from './supabase';
@@ -68,9 +69,44 @@ export class AppStore {
   private activeUser: CurrentUser | null = null;
 
   constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
+    this.db = AppStore.openDatabase(dbPath);
     this.bootstrap();
+  }
+
+  private static openDatabase(dbPath: string): Database.Database {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+    const open = (): Database.Database => {
+      const db = new Database(dbPath);
+      db.pragma('journal_mode = WAL');
+      db.pragma('busy_timeout = 5000');
+      return db;
+    };
+
+    try {
+      return open();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isIoError = /disk I\/O error|SQLITE_IOERR/i.test(message);
+
+      if (!isIoError) {
+        throw error;
+      }
+
+      // Retry once after removing stale WAL/SHM sidecar files.
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecarPath = `${dbPath}${suffix}`;
+        try {
+          if (fs.existsSync(sidecarPath)) {
+            fs.rmSync(sidecarPath);
+          }
+        } catch {
+          // Ignore cleanup failures and let retry surface the real issue.
+        }
+      }
+
+      return open();
+    }
   }
 
   public async initialize(): Promise<void> {

@@ -19,7 +19,7 @@ import type {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
-const store = new AppStore(getDatabasePath());
+let store!: AppStore;
 
 const sendMenuAction = (action: MenuAction, payload?: { version?: string }): void => {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -141,6 +141,7 @@ const createWindow = (): void => {
 };
 
 app.whenReady().then(async () => {
+  store = new AppStore(getDatabasePath());
   createWindow();
   installAppMenu();
   await store.initialize();
