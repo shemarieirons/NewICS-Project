@@ -958,15 +958,9 @@ export default function App(): JSX.Element {
                           <span>Current status</span>
                           <strong>{openSession ? 'On Shift' : 'Off Shift'}</strong>
                         </div>
-                      </div>
-                      <div className="metric-row" style={{ marginTop: '1rem' }}>
-                        <div>
-                          <strong>{employeeLeaveRequests.filter((request) => request.status === 'pending').length}</strong>
-                          <span>Pending leave</span>
-                        </div>
-                        <div>
-                          <strong>{activeTimeSessions.length}</strong>
-                          <span>Time records</span>
+                        <div className="profile-item">
+                          <span>Employee since</span>
+                          <strong>{currentEmployee ? formatDate(currentEmployee.dateJoined) : '—'}</strong>
                         </div>
                       </div>
                       <div className="button-row" style={{ marginTop: '1rem' }}>
