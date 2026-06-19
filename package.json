@@ -8,10 +8,12 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:linux": "npm run build && electron-builder --linux",
+    "rebuild:native": "electron-builder install-app-deps",
+    "postinstall": "npm run rebuild:native",
+    "dist": "npm run build && npm run rebuild:native && electron-builder",
+    "dist:mac": "npm run build && npm run rebuild:native && electron-builder --mac",
+    "dist:win": "npm run build && npm run rebuild:native && electron-builder --win nsis",
+    "dist:linux": "npm run build && npm run rebuild:native && electron-builder --linux",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit"
   },
@@ -41,7 +43,7 @@
     "asarUnpack": [
       "**/*.node"
     ],
-    "npmRebuild": true,
+    "npmRebuild": false,
     "buildDependenciesFromSource": false,
     "directories": {
       "output": "release"
@@ -58,17 +60,15 @@
       "identity": null
     },
     "win": {
-  "target": [
-    {
-      "target": "nsis",
-      "arch": ["x64"]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
-    {
-      "target": "portable",
-      "arch": ["x64"]
-    }
-  ]
-},
     "linux": {
       "target": [
         "AppImage"
