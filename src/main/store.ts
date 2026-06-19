@@ -32,6 +32,20 @@ const isoNow = (): string => new Date().toISOString();
 const employeeDisplayName = (firstName: string, lastName: string): string =>
   `${firstName} ${lastName}`.trim();
 
+const isValidDateJoined = (value: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+};
+
+const getDayFromDateJoined = (value: string): number => {
+  const day = Number(value.slice(8, 10));
+  return Number.isFinite(day) ? day : 0;
+};
+
 const toCsv = (rows: Array<Record<string, string | number | null | boolean>>): string => {
   if (rows.length === 0) {
     return '';
@@ -75,7 +89,7 @@ export class AppStore {
         first_name TEXT NOT NULL,
         last_name TEXT NOT NULL,
         username TEXT NOT NULL UNIQUE,
-        dob TEXT NOT NULL,
+        date_joined TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         created_at TEXT NOT NULL,
         device_id TEXT NOT NULL,
@@ -115,6 +129,8 @@ export class AppStore {
       );
     `);
 
+    this.migrateEmployeesTable();
+
     try {
       this.db.exec("ALTER TABLE leave_requests ADD COLUMN type TEXT DEFAULT 'Other'");
     } catch {
@@ -150,6 +166,53 @@ export class AppStore {
       key,
       value
     );
+  }
+
+  private migrateEmployeesTable(): void {
+    const columns = this.db.prepare('PRAGMA table_info(employees)').all() as Array<{ name: string }>;
+    const columnNames = new Set(columns.map((column) => column.name));
+
+    if (!columnNames.has('dob') || columnNames.has('date_joined')) {
+      return;
+    }
+
+    this.db.exec(`
+      ALTER TABLE employees RENAME TO employees_legacy;
+      CREATE TABLE employees (
+        id TEXT PRIMARY KEY,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        username TEXT NOT NULL UNIQUE,
+        date_joined TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        version_clock INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO employees (
+        id,
+        first_name,
+        last_name,
+        username,
+        date_joined,
+        password_hash,
+        created_at,
+        device_id,
+        version_clock
+      )
+      SELECT
+        id,
+        first_name,
+        last_name,
+        username,
+        dob,
+        password_hash,
+        created_at,
+        device_id,
+        version_clock
+      FROM employees_legacy;
+      DROP TABLE employees_legacy;
+    `);
   }
 
   private async initializeSupabaseFromSettings(): Promise<void> {
@@ -268,7 +331,7 @@ export class AppStore {
               first_name,
               last_name,
               username,
-              dob,
+              date_joined,
               password_hash,
               created_at,
               device_id,
@@ -279,7 +342,7 @@ export class AppStore {
               first_name = excluded.first_name,
               last_name = excluded.last_name,
               username = excluded.username,
-              dob = excluded.dob,
+              date_joined = excluded.date_joined,
               password_hash = excluded.password_hash,
               created_at = excluded.created_at,
               device_id = excluded.device_id,
@@ -290,7 +353,7 @@ export class AppStore {
             emp.first_name,
             emp.last_name,
             emp.username,
-            emp.dob,
+            emp.date_joined,
             emp.password_hash,
             emp.created_at,
             emp.device_id || '',
@@ -439,7 +502,7 @@ export class AppStore {
   private getEmployees(): EmployeeRecord[] {
     const rawEmployees = this.db
       .prepare(
-        `SELECT id, first_name AS firstName, last_name AS lastName, username, dob, password_hash, created_at AS createdAt
+        `SELECT id, first_name AS firstName, last_name AS lastName, username, date_joined AS dateJoined, password_hash, created_at AS createdAt
          FROM employees
          ORDER BY created_at DESC`
       )
@@ -448,22 +511,21 @@ export class AppStore {
         firstName: string;
         lastName: string;
         username: string;
-        dob: string;
+        dateJoined: string;
         password_hash: string;
         createdAt: string;
       }>;
   
     return rawEmployees.map((emp) => {
-      const dobParts = emp.dob.split('-');
-      const dayOfBirth = Number(dobParts[2] || 0);
-      const generatedPassword = `${emp.firstName.trim()[0]}${emp.lastName.trim()[0]}${dayOfBirth}`.toLowerCase();
+      const dayOfDateJoined = getDayFromDateJoined(emp.dateJoined);
+      const generatedPassword = `${emp.firstName.trim()[0]}${emp.lastName.trim()[0]}${dayOfDateJoined}`.toLowerCase();
       const isDefault = emp.password_hash === hashPassword(generatedPassword);
       return {
         id: emp.id,
         firstName: emp.firstName,
         lastName: emp.lastName,
         username: emp.username,
-        dob: emp.dob,
+        dateJoined: emp.dateJoined,
         createdAt: emp.createdAt,
         passwordChanged: !isDefault,
         defaultPassword: isDefault ? generatedPassword : undefined
@@ -630,20 +692,24 @@ export class AppStore {
     if (!this.activeUser || this.activeUser.role !== 'manager') {
       throw new Error('Only managers can create employees.');
     }
-    if (!input.firstName.trim() || !input.lastName.trim() || !input.username.trim() || !input.dob.trim()) {
+    if (!input.firstName.trim() || !input.lastName.trim() || !input.username.trim() || !input.dateJoined.trim()) {
       throw new Error('All employee fields are required.');
     }
-  
-    const dobParts = input.dob.split('-');
-    const dayOfBirth = Number(dobParts[2]);
-    const generatedPassword = `${input.firstName.trim()[0]}${input.lastName.trim()[0]}${dayOfBirth}`.toLowerCase();
+
+    const dateJoined = input.dateJoined.trim();
+    if (!isValidDateJoined(dateJoined)) {
+      throw new Error('Date Joined Organization must be a valid YYYY-MM-DD date.');
+    }
+
+    const dayOfDateJoined = getDayFromDateJoined(dateJoined);
+    const generatedPassword = `${input.firstName.trim()[0]}${input.lastName.trim()[0]}${dayOfDateJoined}`.toLowerCase();
     const createdAt = isoNow();
     const empId = randomUUID(); // <-- UUID instead of auto-increment
     const deviceId = this.getSetting('device_id');
   
     this.db
       .prepare(
-        `INSERT INTO employees (id, first_name, last_name, username, dob, password_hash, created_at, device_id, version_clock)
+        `INSERT INTO employees (id, first_name, last_name, username, date_joined, password_hash, created_at, device_id, version_clock)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
@@ -651,7 +717,7 @@ export class AppStore {
         input.firstName.trim(),
         input.lastName.trim(),
         input.username.trim(),
-        input.dob.trim(),
+        dateJoined,
         hashPassword(generatedPassword),
         createdAt,
         deviceId,

@@ -7,6 +7,7 @@ import type {
   CreateEmployeeInput,
   ExportFilters,
   LoginInput,
+  MenuAction,
   ResetEmployeePasswordInput,
   ReviewLeaveInput,
   SubmitLeaveInput,
@@ -33,6 +34,10 @@ declare global {
       resetEmployeePassword: (input: ResetEmployeePasswordInput) => Promise<AppSnapshot>;
       exportTimeLogsCsv: (filters: ExportFilters) => Promise<string>;
       exportLeaveRequestsCsv: (filters: ExportFilters) => Promise<string>;
+      syncNow: () => Promise<AppSnapshot>;
+      exitApp: () => Promise<void>;
+      showContextMenu: () => Promise<void>;
+      onMenuAction: (callback: (action: MenuAction, payload?: { version?: string }) => void) => () => void;
       onSnapshotUpdated: (callback: () => void) => () => void;
     };
   }

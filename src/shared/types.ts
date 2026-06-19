@@ -1,5 +1,19 @@
 export type Role = 'employee' | 'manager';
 
+export type MenuAction =
+  | 'menu:exportTimeLogs'
+  | 'menu:exportLeaveRequests'
+  | 'menu:logout'
+  | 'menu:exit'
+  | 'menu:dashboard'
+  | 'menu:timeHistory'
+  | 'menu:leaveRequest'
+  | 'menu:leaveStatus'
+  | 'menu:toggleTheme'
+  | 'menu:syncNow'
+  | 'menu:systemStatus'
+  | 'menu:about';
+
 export interface CurrentUser {
   id: string;
   role: Role;
@@ -12,7 +26,7 @@ export interface EmployeeRecord {
   firstName: string;
   lastName: string;
   username: string;
-  dob: string;
+  dateJoined: string;
   createdAt: string;
   passwordChanged: boolean;
   defaultPassword?: string;
@@ -74,7 +88,7 @@ export interface CreateEmployeeInput {
   firstName: string;
   lastName: string;
   username: string;
-  dob: string;
+  dateJoined: string;
 }
 
 export interface SubmitLeaveInput {

@@ -28,6 +28,8 @@ export class SupabaseSync {
   private client: SupabaseClient | null = null;
   private enabled = false;
 
+  private static readonly defaultEmployeeDob = '01-01-1111';
+
   constructor() {
     this.enabled = false;
     this.client = null;
@@ -178,8 +180,13 @@ export class SupabaseSync {
             success = true;
           }
         } else if (action.entityType === 'employee') {
+          const employeePayload = {
+            ...convertedPayload,
+            dob: SupabaseSync.defaultEmployeeDob
+          };
+
           success = await this.syncRecord('employees', {
-            ...(convertedPayload as Record<string, unknown>),
+            ...(employeePayload as Record<string, unknown>),
             synced: 1
           });
         } else if (action.entityType === 'attendance') {

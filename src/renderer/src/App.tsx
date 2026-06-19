@@ -5,7 +5,7 @@ import type {
   CurrentUser,
   LeaveRequestRecord,
   Role
-} from '../../shared/types';
+} from '../../shared/types.js';
 
 type Screen = 'boot' | 'wizard' | 'login' | 'app';
 type EmployeeTab = 'dashboard' | 'history' | 'leave_request' | 'leave_status' | 'account_settings';
@@ -77,7 +77,7 @@ const defaultEmployeeForm = {
   firstName: '',
   lastName: '',
   username: '',
-  dob: ''
+  dateJoined: ''
 };
 
 const defaultLeaveForm = {
@@ -98,7 +98,7 @@ export default function App(): JSX.Element {
   const [employeeForm, setEmployeeForm] = useState(defaultEmployeeForm);
   const [leaveForm, setLeaveForm] = useState(defaultLeaveForm);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
-  const [leaveFilters, setLeaveFilters] = useState({ fromDate: '', toDate: '', status: 'pending' as LeaveRequestRecord['status'] | 'pending' | '' });
+  const [leaveFilters, setLeaveFilters] = useState({ fromDate: '', toDate: '', status: '' as LeaveRequestRecord['status'] | '' });
   const [timeFilters, setTimeFilters] = useState({ fromDate: '', toDate: '', employeeId: '' });
   const [selectedLeaveId, setSelectedLeaveId] = useState('');
   const [selectedLeaveStatus, setSelectedLeaveStatus] = useState<'approved' | 'rejected'>('approved');
@@ -120,7 +120,7 @@ export default function App(): JSX.Element {
   }, [theme]);
 
   useEffect(() => {
-    let unsubscribe = () => undefined;
+    let unsubscribe = (): void => {};
 
     const boot = async (): Promise<void> => {
       try {
@@ -161,6 +161,137 @@ export default function App(): JSX.Element {
     if (!snapshot.currentUser) {
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
     }
+  }, [snapshot.currentUser]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const isCommandOrControl = event.ctrlKey || event.metaKey;
+      if (!isCommandOrControl) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      const isTypingField = Boolean(target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+
+      if (event.key.toLowerCase() === 'l' && !event.shiftKey) {
+        event.preventDefault();
+        void handleLogout();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'd' && !event.shiftKey) {
+        event.preventDefault();
+        if (snapshot.currentUser?.role === 'employee') {
+          setEmployeeTab('dashboard');
+        } else if (snapshot.currentUser?.role === 'manager') {
+          setManagerTab('dashboard');
+        }
+        return;
+      }
+
+      if (event.key.toLowerCase() === 't' && event.shiftKey) {
+        event.preventDefault();
+        setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'v' && isTypingField) {
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [snapshot.currentUser]);
+
+  useEffect(() => {
+    const handleContextMenu = (event: MouseEvent): void => {
+      event.preventDefault();
+      void window.ironsApi.showContextMenu();
+    };
+
+    window.addEventListener('contextmenu', handleContextMenu);
+    return () => {
+      window.removeEventListener('contextmenu', handleContextMenu);
+    };
+  }, []);
+
+  useEffect(() => {
+    const removeListener = window.ironsApi.onMenuAction((action, payload) => {
+      if (action === 'menu:logout') {
+        void handleLogout();
+        return;
+      }
+
+      if (action === 'menu:dashboard') {
+        if (snapshot.currentUser?.role === 'employee') {
+          setEmployeeTab('dashboard');
+        } else if (snapshot.currentUser?.role === 'manager') {
+          setManagerTab('dashboard');
+        }
+        return;
+      }
+
+      if (action === 'menu:timeHistory' && snapshot.currentUser?.role === 'employee') {
+        setEmployeeTab('history');
+        return;
+      }
+
+      if (action === 'menu:leaveRequest' && snapshot.currentUser?.role === 'employee') {
+        setEmployeeTab('leave_request');
+        return;
+      }
+
+      if (action === 'menu:leaveStatus' && snapshot.currentUser?.role === 'employee') {
+        setEmployeeTab('leave_status');
+        return;
+      }
+
+      if (action === 'menu:toggleTheme') {
+        setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+        return;
+      }
+
+      if (action === 'menu:syncNow') {
+        void window.ironsApi.syncNow().then((current) => setSnapshot(current));
+        return;
+      }
+
+      if (action === 'menu:systemStatus') {
+        if (snapshot.currentUser?.role === 'manager') {
+          setManagerTab('system_status');
+        }
+        return;
+      }
+
+      if (action === 'menu:exportTimeLogs') {
+        if (snapshot.currentUser?.role === 'manager') {
+          void handleExportTimeLogs();
+        }
+        return;
+      }
+
+      if (action === 'menu:exportLeaveRequests') {
+        if (snapshot.currentUser?.role === 'manager') {
+          void handleExportLeaveRequests();
+        }
+        return;
+      }
+
+      if (action === 'menu:about') {
+        const version = payload?.version ? ` v${payload.version}` : '';
+        showNotice('info', `Irons Workforce Tracker${version}`);
+        return;
+      }
+
+      if (action === 'menu:exit') {
+        void window.ironsApi.exitApp();
+      }
+    });
+
+    return removeListener;
   }, [snapshot.currentUser]);
 
   const managerEmployees = snapshot.employees;
@@ -262,7 +393,30 @@ export default function App(): JSX.Element {
     });
   }, [activityFilters.category, activityFilters.fromDate, activityFilters.toDate, recentActivity]);
 
-  const visibleRecentActivity = activityExpanded ? filteredRecentActivity : filteredRecentActivity.slice(0, 3);
+  const visibleRecentActivity = activityExpanded ? filteredRecentActivity : filteredRecentActivity.slice(0, 2);
+
+  const filteredTimeSessions = useMemo(() => {
+    return snapshot.attendanceSessions.filter((session) => {
+      if (snapshot.currentUser?.role === 'employee' && session.employeeId !== snapshot.currentUser.id) {
+        return false;
+      }
+
+      if (timeFilters.employeeId && session.employeeId !== timeFilters.employeeId) {
+        return false;
+      }
+
+      const sessionDate = session.clockInAt.slice(0, 10);
+      if (timeFilters.fromDate && sessionDate < timeFilters.fromDate) {
+        return false;
+      }
+
+      if (timeFilters.toDate && sessionDate > timeFilters.toDate) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [snapshot.attendanceSessions, snapshot.currentUser?.id, snapshot.currentUser?.role, timeFilters.employeeId, timeFilters.fromDate, timeFilters.toDate]);
 
   const filteredLeaveRequests = useMemo(() => {
     return snapshot.leaveRequests.filter((request) => {
@@ -362,7 +516,7 @@ export default function App(): JSX.Element {
       const next = await window.ironsApi.createEmployee(employeeForm);
       setSnapshot(next);
       setEmployeeForm(defaultEmployeeForm);
-      const generatedPassword = `${employeeForm.firstName.trim()[0]}${employeeForm.lastName.trim()[0]}${Number(employeeForm.dob.split('-')[2])}`.toLowerCase();
+      const generatedPassword = `${employeeForm.firstName.trim()[0]}${employeeForm.lastName.trim()[0]}${Number(employeeForm.dateJoined.split('-')[2])}`.toLowerCase();
       showNotice('success', `Employee created. Temporary password: ${generatedPassword}`);
     } catch (error) {
       showNotice('error', error instanceof Error ? error.message : 'Could not create employee.');
@@ -801,19 +955,11 @@ export default function App(): JSX.Element {
                           <strong>@{snapshot.currentUser.username}</strong>
                         </div>
                         <div className="profile-item">
-                          <span>Date of birth</span>
-                          <strong>{currentEmployee ? formatDate(currentEmployee.dob) : '—'}</strong>
-                        </div>
-                        <div className="profile-item">
-                          <span>Member since</span>
-                          <strong>{currentEmployee ? formatDate(currentEmployee.createdAt.slice(0, 10)) : '—'}</strong>
+                          <span>Current status</span>
+                          <strong>{openSession ? 'On Shift' : 'Off Shift'}</strong>
                         </div>
                       </div>
                       <div className="metric-row" style={{ marginTop: '1rem' }}>
-                        <div>
-                          <strong>{openSession ? 'On shift' : 'Off shift'}</strong>
-                          <span>Current status</span>
-                        </div>
                         <div>
                           <strong>{employeeLeaveRequests.filter((request) => request.status === 'pending').length}</strong>
                           <span>Pending leave</span>
@@ -836,7 +982,7 @@ export default function App(): JSX.Element {
                     <article className="panel">
                       <div className="panel-section-header">
                         <span className="eyebrow">Recent activity</span>
-                        {filteredRecentActivity.length > 3 ? (
+                        {filteredRecentActivity.length > 2 ? (
                           <button
                             type="button"
                             className="secondary small expand-toggle"
@@ -936,6 +1082,7 @@ export default function App(): JSX.Element {
                           <option value="Personal Leave">Personal Leave</option>
                           <option value="Family Emergency">Family Emergency</option>
                           <option value="Bereavement">Bereavement</option>
+                          <option value="Maternity/Paternity Leave">Maternity/Paternity Leave</option>
                           <option value="Other">Other</option>
                         </select>
                       </label>
@@ -1082,7 +1229,7 @@ export default function App(): JSX.Element {
                           <div className="list-row" key={employee.id}>
                             <div style={{ flex: 1 }}>
                               <strong>{employee.firstName} {employee.lastName}</strong>
-                              <div className="text-muted"><small>@{employee.username} • DOB: {employee.dob}</small></div>
+                              <div className="text-muted"><small>@{employee.username} • Date joined: {formatDate(employee.dateJoined)}</small></div>
                               <div className="text-muted"><small>Added: {formatDate(employee.createdAt.slice(0, 10))}</small></div>
                             </div>
                             <div style={{ flex: 1 }}>
@@ -1141,11 +1288,11 @@ export default function App(): JSX.Element {
                           />
                         </label>
                         <label>
-                          Date of birth
+                          Date joined organization
                           <input
                             type="date"
-                            value={employeeForm.dob}
-                            onChange={(event) => setEmployeeForm((current) => ({ ...current, dob: event.target.value }))}
+                            value={employeeForm.dateJoined}
+                            onChange={(event) => setEmployeeForm((current) => ({ ...current, dateJoined: event.target.value }))}
                             required
                           />
                         </label>
@@ -1172,24 +1319,26 @@ export default function App(): JSX.Element {
                             ))}
                           </select>
                         </label>
-                        {pendingLeaveRequests.length === 0 ? (
-                          <p className="text-muted">No pending leave requests.</p>
-                        ) : (
-                          <>
-                            <div className="stack-list">
-                              {pendingLeaveRequests.map((request) => (
-                                <div className="list-row" key={request.id}>
-                                  <div>
-                                    <strong>{request.employeeName}</strong>
-                                    <div className="text-muted">
-                                      <small>{request.type} • {formatDate(request.startDate)} to {formatDate(request.endDate)}</small>
-                                    </div>
-                                    {request.reason ? <div className="text-muted"><small>{request.reason}</small></div> : null}
+                        <div className="stack-list">
+                          {pendingLeaveRequests.length === 0 ? (
+                            <p className="text-muted">No pending leave requests.</p>
+                          ) : (
+                            pendingLeaveRequests.map((request) => (
+                              <div className="list-row" key={request.id}>
+                                <div>
+                                  <strong>{request.employeeName}</strong>
+                                  <div className="text-muted">
+                                    <small>{request.type} • {formatDate(request.startDate)} to {formatDate(request.endDate)}</small>
                                   </div>
-                                  <span className="status-badge pending">{request.status}</span>
+                                  {request.reason ? <div className="text-muted"><small>{request.reason}</small></div> : null}
                                 </div>
-                              ))}
-                            </div>
+                                <span className="status-badge pending">{request.status}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        {selectedLeaveRequest ? (
+                          <>
                             <div className="segmented">
                               <button type="button" className={selectedLeaveStatus === 'approved' ? 'active' : ''} onClick={() => setSelectedLeaveStatus('approved')}>
                                 Approve
@@ -1211,6 +1360,8 @@ export default function App(): JSX.Element {
                               Save decision
                             </button>
                           </>
+                        ) : (
+                          <p className="text-muted">Select a pending leave request to review it.</p>
                         )}
                       </div>
                     </article>
@@ -1237,7 +1388,7 @@ export default function App(): JSX.Element {
                               }))
                             }
                           >
-                            <option value="">All statuses</option>
+                            <option value="">All Statuses</option>
                             <option value="pending">Pending</option>
                             <option value="approved">Approved</option>
                             <option value="rejected">Rejected</option>
@@ -1331,14 +1482,14 @@ export default function App(): JSX.Element {
                         <span>In</span>
                         <span>Out</span>
                       </div>
-                      {snapshot.attendanceSessions.map((session) => (
+                      {filteredTimeSessions.map((session) => (
                         <div className="data-table-row time-log-cols" key={session.id}>
                           <span>{session.employeeName}</span>
                           <span>{formatDateTime(session.clockInAt)}</span>
                           <span>{session.clockOutAt ? formatDateTime(session.clockOutAt) : 'Open'}</span>
                         </div>
                       ))}
-                      {snapshot.attendanceSessions.length === 0 ? (
+                      {filteredTimeSessions.length === 0 ? (
                         <p className="data-table-empty">No attendance records found.</p>
                       ) : null}
                     </div>
