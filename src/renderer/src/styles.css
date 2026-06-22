@@ -131,6 +131,11 @@ button.secondary,
   box-shadow: none;
 }
 
+button.danger {
+  background: linear-gradient(180deg, var(--danger), #c94040);
+  color: #ffffff;
+}
+
 button.active,
 .segmented button.active,
 .theme-toggle button.active {
@@ -447,6 +452,37 @@ textarea {
 .notice.info {
   background: var(--notice-info-bg);
   border-color: var(--notice-info-border);
+}
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(6, 10, 18, 0.72);
+  backdrop-filter: blur(6px);
+  z-index: 50;
+}
+
+.confirm-dialog {
+  width: min(100%, 480px);
+  display: grid;
+  gap: 1rem;
+  padding: 1.4rem;
+  border-radius: 24px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.confirm-dialog h2 {
+  margin: 0;
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--muted);
 }
 
 .boot-screen {

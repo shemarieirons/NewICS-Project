@@ -19,6 +19,19 @@ type ActivityItem = {
   category: 'attendance' | 'leave';
 };
 type ThemeMode = 'dark' | 'light';
+type PendingConfirmAction =
+  | {
+      kind: 'deleteEmployee';
+      employeeId: number;
+      employeeName: string;
+    }
+  | {
+      kind: 'withdrawLeave';
+      employeeId: number;
+      requestId: number;
+      requestType: string;
+      employeeName: string;
+    };
 
 const THEME_STORAGE_KEY = 'irons-theme';
 
@@ -113,6 +126,7 @@ export default function App(): JSX.Element {
   const [employeeResetForm, setEmployeeResetForm] = useState({ employeeId: '', newPassword: '', confirmPassword: '' });
   const [activityExpanded, setActivityExpanded] = useState(false);
   const [activityFilters, setActivityFilters] = useState({ category: '' as '' | 'attendance' | 'leave', fromDate: '', toDate: '' });
+  const [pendingConfirmAction, setPendingConfirmAction] = useState<PendingConfirmAction | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -525,20 +539,18 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleDeleteEmployee = async (employeeId: number): Promise<void> => {
-    if (!confirm('Are you sure you want to delete this employee?')) {
+  const handleDeleteEmployee = (employeeId: number): void => {
+    const employee = snapshot.employees.find((entry) => entry.id === employeeId);
+
+    if (!employee) {
       return;
     }
-    setLoading(true);
-    try {
-      const next = await window.ironsApi.deleteEmployee(employeeId);
-      setSnapshot(next);
-      showNotice('success', 'Employee deleted.');
-    } catch (error) {
-      showNotice('error', error instanceof Error ? error.message : 'Could not delete employee.');
-    } finally {
-      setLoading(false);
-    }
+
+    setPendingConfirmAction({
+      kind: 'deleteEmployee',
+      employeeId,
+      employeeName: `${employee.firstName} ${employee.lastName}`
+    });
   };
 
   const handleClockIn = async (): Promise<void> => {
@@ -580,20 +592,24 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleWithdrawLeave = async (requestId: number): Promise<void> => {
+  const handleWithdrawLeave = (requestId: number): void => {
     if (!snapshot.currentUser || snapshot.currentUser.role !== 'employee') {
       return;
     }
-    if (!confirm('Are you sure you want to withdraw this leave request?')) {
+
+    const request = snapshot.leaveRequests.find((entry) => entry.id === requestId && entry.employeeId === snapshot.currentUser?.id);
+
+    if (!request) {
       return;
     }
-    try {
-      const next = await window.ironsApi.withdrawLeaveRequest({ requestId, employeeId: snapshot.currentUser.id });
-      setSnapshot(next);
-      showNotice('success', 'Leave request withdrawn.');
-    } catch (error) {
-      showNotice('error', error instanceof Error ? error.message : 'Unable to withdraw leave request.');
-    }
+
+    setPendingConfirmAction({
+      kind: 'withdrawLeave',
+      employeeId: snapshot.currentUser.id,
+      requestId,
+      requestType: request.type,
+      employeeName: snapshot.currentUser.displayName
+    });
   };
 
   const handlePasswordChange = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
@@ -722,6 +738,40 @@ export default function App(): JSX.Element {
       showNotice('success', `Request ${selectedLeaveStatus}.`);
     } catch (error) {
       showNotice('error', error instanceof Error ? error.message : 'Review action failed.');
+    }
+  };
+
+  const closePendingConfirmAction = (): void => {
+    setPendingConfirmAction(null);
+  };
+
+  const confirmPendingAction = async (): Promise<void> => {
+    if (!pendingConfirmAction) {
+      return;
+    }
+
+    const action = pendingConfirmAction;
+    closePendingConfirmAction();
+    setLoading(true);
+
+    try {
+      if (action.kind === 'deleteEmployee') {
+        const next = await window.ironsApi.deleteEmployee(action.employeeId);
+        setSnapshot(next);
+        showNotice('success', 'Employee deleted.');
+        return;
+      }
+
+      const next = await window.ironsApi.withdrawLeaveRequest({
+        requestId: action.requestId,
+        employeeId: action.employeeId
+      });
+      setSnapshot(next);
+      showNotice('success', 'Leave request withdrawn.');
+    } catch (error) {
+      showNotice('error', error instanceof Error ? error.message : 'Action failed.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1593,6 +1643,37 @@ export default function App(): JSX.Element {
               </>
             ) : null}
           </section>
+        ) : null}
+
+        {pendingConfirmAction ? (
+          <div className="confirm-backdrop" role="presentation" onClick={closePendingConfirmAction}>
+            <div
+              className="confirm-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="confirm-dialog-title"
+              aria-describedby="confirm-dialog-description"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <span className="eyebrow">Confirm action</span>
+              <h2 id="confirm-dialog-title">
+                {pendingConfirmAction.kind === 'deleteEmployee' ? 'Delete employee?' : 'Withdraw leave request?'}
+              </h2>
+              <p id="confirm-dialog-description">
+                {pendingConfirmAction.kind === 'deleteEmployee'
+                  ? `This permanently removes ${pendingConfirmAction.employeeName} from the workspace.`
+                  : `This will withdraw the ${pendingConfirmAction.requestType} request for ${pendingConfirmAction.employeeName}.`}
+              </p>
+              <div className="button-row">
+                <button type="button" className="secondary" onClick={closePendingConfirmAction} disabled={loading}>
+                  Cancel
+                </button>
+                <button type="button" className="danger" onClick={confirmPendingAction} disabled={loading}>
+                  {loading ? 'Working...' : 'Confirm'}
+                </button>
+              </div>
+            </div>
+          </div>
         ) : null}
       </main>
     </div>
